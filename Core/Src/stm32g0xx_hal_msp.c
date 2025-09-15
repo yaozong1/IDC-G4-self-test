@@ -370,6 +370,34 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
 
     /* USER CODE END USART2_MspInit 1 */
   }
+  else if(huart->Instance==USART4)
+  {
+    /* USER CODE BEGIN USART4_MspInit 0 */
+
+    /* USER CODE END USART4_MspInit 0 */
+
+    /* Peripheral clock enable */
+    __HAL_RCC_USART4_CLK_ENABLE();
+
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    /**USART4 GPIO Configuration
+    PA0     ------> USART4_TX
+    PA1     ------> USART4_RX
+    */
+    GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Alternate = GPIO_AF4_USART4;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    /* USART4 interrupt Init */
+    HAL_NVIC_SetPriority(USART3_4_LPUART1_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(USART3_4_LPUART1_IRQn);
+    /* USER CODE BEGIN USART4_MspInit 1 */
+
+    /* USER CODE END USART4_MspInit 1 */
+  }
 
 }
 
@@ -420,6 +448,26 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* huart)
     /* USER CODE BEGIN USART2_MspDeInit 1 */
 
     /* USER CODE END USART2_MspDeInit 1 */
+  }
+  else if(huart->Instance==USART4)
+  {
+    /* USER CODE BEGIN USART4_MspDeInit 0 */
+
+    /* USER CODE END USART4_MspDeInit 0 */
+    /* Peripheral clock disable */
+    __HAL_RCC_USART4_CLK_DISABLE();
+
+    /**USART4 GPIO Configuration
+    PA0     ------> USART4_TX
+    PA1     ------> USART4_RX
+    */
+    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_0|GPIO_PIN_1);
+
+    /* USART4 interrupt DeInit */
+    HAL_NVIC_DisableIRQ(USART3_4_LPUART1_IRQn);
+    /* USER CODE BEGIN USART4_MspDeInit 1 */
+
+    /* USER CODE END USART4_MspDeInit 1 */
   }
 
 }

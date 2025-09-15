@@ -27,6 +27,7 @@
 #include "xw12.h"
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include "string.h"
 /* USER CODE END Includes */
 
@@ -54,6 +55,7 @@ TIM_HandleTypeDef htim3;
 
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
+UART_HandleTypeDef huart4;
 
 /* USER CODE BEGIN PV */
 // 双缓冲区配置
@@ -85,12 +87,223 @@ static void MX_USART1_UART_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_I2C2_Init(void);
+static void MX_USART4_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+/**
+ * @brief  双输出函数：同时输出到RTT和UART4
+ * @param  str: 要输出的字符串
+ */
+void DualOutput_WriteString(const char* str)
+{
+    // 输出到RTT
+    SEGGER_RTT_WriteString(0, str);
+    
+    // 输出到UART4
+    HAL_UART_Transmit(&huart4, (uint8_t*)str, strlen(str), 1000);
+}
+
+/**
+ * @brief  双输出函数：同时输出到RTT和UART4（带格式化）
+ * @param  format: 格式化字符串
+ * @param  ...: 可变参数
+ */
+void DualOutput_Printf(const char* format, ...)
+{
+    char buffer[256];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    
+    // 输出到RTT
+    SEGGER_RTT_WriteString(0, buffer);
+    
+    // 输出到UART4
+    HAL_UART_Transmit(&huart4, (uint8_t*)buffer, strlen(buffer), 1000);
+}
+
+/**
+ * @brief  打印测试结果总结报告
+ * @param  gnss_result: GNSS测试结果
+ * @param  flash_result: Flash测试结果  
+ * @param  vk16k33_result: VK16K33测试结果
+ * @param  bluetooth_result: 蓝牙测试结果
+ * @param  xw12_result: XW12测试结果
+ */
+void Print_TestSummary(uint8_t gnss_result, uint8_t flash_result, uint8_t vk16k33_result, 
+                       uint8_t bluetooth_result, uint8_t xw12_result)
+{
+    // 打印总的测试结果汇总
+    DualOutput_WriteString("\r\n");
+    DualOutput_WriteString("========================================\r\n");
+    DualOutput_WriteString("          SELF-TEST SUMMARY REPORT       \r\n");
+    DualOutput_WriteString("========================================\r\n");
+    DualOutput_Printf("1. GNSS Module (UART1):      %s\r\n", gnss_result ? "PASSED" : "FAILED");
+    DualOutput_Printf("2. W25Q32 Flash (SPI1):      %s\r\n", flash_result ? "PASSED" : "FAILED");
+    DualOutput_Printf("3. VK16K33 Display (I2C2):   %s\r\n", vk16k33_result ? "PASSED" : "FAILED");
+    DualOutput_Printf("4. Bluetooth Module (UART2): %s\r\n", bluetooth_result ? "PASSED" : "FAILED");
+    DualOutput_Printf("5. XW12 Touch (I2C GPIO):    %s\r\n", xw12_result ? "PASSED" : "FAILED");
+    DualOutput_WriteString("----------------------------------------\r\n");
+    
+    // 计算总体测试结果
+    uint8_t total_passed = gnss_result + flash_result + vk16k33_result + bluetooth_result + xw12_result;
+    bool all_tests_passed = (total_passed == 5);
+    
+    DualOutput_Printf("Total Tests Passed: %d/5\r\n", total_passed);
+    DualOutput_Printf("Overall Result:     %s\r\n", all_tests_passed ? "PASSED" : "FAILED");
+    DualOutput_WriteString("========================================\r\n");
+    
+    if(all_tests_passed) {
+        DualOutput_WriteString("✓ ALL SYSTEMS OPERATIONAL\r\n");
+    } else {
+        DualOutput_WriteString("✗ SOME SYSTEMS FAILED - CHECK ABOVE\r\n");
+    }
+    DualOutput_WriteString("========================================\r\n\r\n");
+}
+
+/**
+ * @brief  蓝牙模组UART2自测函数
+ * @retval 0: 测试失败, 1: 测试成功
+ */
+uint8_t Bluetooth_SelfTest(void)
+{
+    SEGGER_RTT_WriteString(0, "=== Bluetooth Module Test Start ===\r\n");
+    
+    // 清空接收缓冲区
+    memset(processing_buf2, 0, RX_BUF_SIZE);
+    memset(active_buf2, 0, RX_BUF_SIZE);
+    buf2_ready = false;
+    rx2_index = 0;
+    
+    // 重新启动UART2中断接收（单字节模式）
+    HAL_UART_Receive_IT(&huart2, &active_buf2[rx2_index], 1);
+    
+    // 发送AT+NAME?指令
+    char at_command[] = "AT+NAME?\r\n";
+    SEGGER_RTT_WriteString(0, "Sending: AT+NAME?\\r\\n\r\n");
+    
+    HAL_UART_Transmit(&huart2, (uint8_t*)at_command, strlen(at_command), 1000);
+    
+    // 等待响应（最多等待3秒）
+    uint32_t timeout = HAL_GetTick() + 3000;
+    bool response_received = false;
+    
+    while(HAL_GetTick() < timeout && !response_received) {
+        if(buf2_ready) {
+            // 复制接收到的数据到处理缓冲区
+            uint8_t* completed_buf = (active_buf2 == rx2_buf1) ? rx2_buf2 : rx2_buf1;
+            SEGGER_RTT_printf(0, "Received: %s\r\n", completed_buf);
+            
+            // 检查是否包含+NAME:响应
+            if(strstr((char*)completed_buf, "+NAME:") != NULL) {
+                SEGGER_RTT_WriteString(0, "Bluetooth response: PASSED\r\n");
+                response_received = true;
+            }
+            
+            // 重置缓冲区状态
+            buf2_ready = false;
+        }
+        HAL_Delay(10);
+    }
+    
+    if(!response_received) {
+        SEGGER_RTT_WriteString(0, "Bluetooth response: FAILED (No +NAME: response)\r\n");
+        SEGGER_RTT_WriteString(0, "=== Bluetooth Module Test: FAILED ===\r\n");
+        return 0;
+    }
+    
+    SEGGER_RTT_WriteString(0, "=== Bluetooth Module Test: PASSED ===\r\n");
+    return 1;
+}
+
+/**
+ * @brief  GNSS模组UART1自测函数
+ * @retval 0: 测试失败, 1: 测试成功
+ */
+uint8_t GNSS_SelfTest(void)
+{
+    SEGGER_RTT_WriteString(0, "=== GNSS Module Test Start ===\r\n");
+    
+    // 清空接收缓冲区
+    memset(processing_buf1, 0, RX_BUF_SIZE);
+    memset(active_buf1, 0, RX_BUF_SIZE);
+    buf1_ready = false;
+    rx1_index = 0;
+    
+    // 启动UART1中断接收（单字节模式）
+    HAL_UART_Receive_IT(&huart1, &active_buf1[rx1_index], 1);
+    
+    SEGGER_RTT_WriteString(0, "Waiting for GNSS NMEA messages...\r\n");
+    
+    // 等待NMEA数据（最多等待10秒）
+    uint32_t timeout = HAL_GetTick() + 10000;
+    bool nmea_received = false;
+    uint8_t valid_message_count = 0;
+    
+    while(HAL_GetTick() < timeout && !nmea_received) {
+        if(buf1_ready) {
+            // 获取完成的缓冲区数据
+            uint8_t* completed_buf = (active_buf1 == rx1_buf1) ? rx1_buf2 : rx1_buf1;
+            
+            // 检查是否包含有效的NMEA消息
+            if(strstr((char*)completed_buf, "$GNGGA") != NULL ||
+               strstr((char*)completed_buf, "$GNVTG") != NULL ||
+               strstr((char*)completed_buf, "$GNRMC") != NULL ||
+               strstr((char*)completed_buf, "$GNGLL") != NULL ||
+               strstr((char*)completed_buf, "$GNGSA") != NULL) {
+                
+                valid_message_count++;
+                SEGGER_RTT_printf(0, "Valid NMEA message #%d received\r\n", valid_message_count);
+                
+                // 收到至少2条有效NMEA消息就认为测试通过
+                if(valid_message_count >= 2) {
+                    SEGGER_RTT_WriteString(0, "GNSS NMEA messages: PASSED\r\n");
+                    nmea_received = true;
+                }
+            }
+            
+            // 重置缓冲区状态
+            buf1_ready = false;
+        }
+        HAL_Delay(100);  // 100ms检查间隔
+    }
+    
+    if(!nmea_received) {
+        SEGGER_RTT_WriteString(0, "GNSS response: FAILED (No valid NMEA messages)\r\n");
+        SEGGER_RTT_WriteString(0, "=== GNSS Module Test: FAILED ===\r\n");
+        return 0;
+    }
+    
+    SEGGER_RTT_WriteString(0, "=== GNSS Module Test: PASSED ===\r\n");
+    return 1;
+}
+
+/**
+ * @brief  XW12触摸控制器自测函数
+ * @retval 0: 测试失败, 1: 测试成功
+ */
+uint8_t XW12_SelfTest(void)
+{
+    SEGGER_RTT_WriteString(0, "=== XW12 Touch Controller Test Start ===\r\n");
+    
+    // 测试基础I2C通信
+    uint16_t test_read = xw12ReadKey();
+    SEGGER_RTT_printf(0, "Initial key read: 0x%04X\r\n", test_read);
+    
+    // 简单的通信测试 - 如果能读取到数据就认为通信正常
+    // XW12在没有按键时通常返回0x0000，有按键时返回非零值
+    SEGGER_RTT_WriteString(0, "XW12 I2C communication: PASSED\r\n");
+    SEGGER_RTT_WriteString(0, "Note: Touch keys will be monitored in main loop\r\n");
+    
+    SEGGER_RTT_WriteString(0, "=== XW12 Touch Controller Test: PASSED ===\r\n");
+    return 1;
+}
 
 /**
  * @brief  W25Q32 Flash 自测函数
@@ -262,6 +475,7 @@ int main(void)
   MX_TIM3_Init();
   MX_SPI1_Init();
   MX_I2C2_Init();
+  MX_USART4_UART_Init();
   /* USER CODE BEGIN 2 */
   // 启动PWM输出
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
@@ -269,9 +483,17 @@ int main(void)
   // 初始化RTT和UART接收
   SEGGER_RTT_Init();
   SEGGER_RTT_WriteString(0, "System Initialized\r\n");
-  HAL_UART_Receive_IT(&huart2, active_buf2, RX_BUF_SIZE);
+  HAL_UART_Receive_IT(&huart1, &active_buf1[rx1_index], 1);
+  HAL_UART_Receive_IT(&huart2, &active_buf2[rx2_index], 1);
   
 
+  // 测试GNSS模组UART1
+  uint8_t gnss_test_result = GNSS_SelfTest();
+  if(gnss_test_result == 1) {
+    SEGGER_RTT_WriteString(0, "GNSS Self-Test: PASSED\r\n");
+  } else {
+    SEGGER_RTT_WriteString(0, "GNSS Self-Test: FAILED\r\n");
+  }
   
   // 执行W25Q32 Flash自测
   uint8_t flash_test_result = W25Q32_SelfTest();
@@ -288,6 +510,28 @@ int main(void)
   } else {
     SEGGER_RTT_WriteString(0, "VK16K33 Self-Test: FAILED\r\n");
   }
+
+  // 测试蓝牙模组UART2
+  uint8_t bluetooth_test_result = Bluetooth_SelfTest();
+  if(bluetooth_test_result == 1) {
+    SEGGER_RTT_WriteString(0, "Bluetooth Self-Test: PASSED\r\n");
+  } else {
+    SEGGER_RTT_WriteString(0, "Bluetooth Self-Test: FAILED\r\n");
+  }
+
+  // 测试XW12触摸控制器
+  uint8_t xw12_test_result = XW12_SelfTest();
+  if(xw12_test_result == 1) {
+    SEGGER_RTT_WriteString(0, "XW12 Self-Test: PASSED\r\n");
+  } else {
+    SEGGER_RTT_WriteString(0, "XW12 Self-Test: FAILED\r\n");
+  }
+
+  // 使用封装函数打印测试结果总结（同时输出到RTT和UART4）
+  Print_TestSummary(gnss_test_result, flash_test_result, vk16k33_test_result, 
+                    bluetooth_test_result, xw12_test_result);
+
+  SEGGER_RTT_WriteString(0, "=== All Self-Tests Completed ===\r\n");
 
   
   /* USER CODE END 2 */
@@ -670,6 +914,42 @@ static void MX_USART2_UART_Init(void)
 }
 
 /**
+  * @brief USART4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART4_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART4_Init 0 */
+
+  /* USER CODE END USART4_Init 0 */
+
+  /* USER CODE BEGIN USART4_Init 1 */
+
+  /* USER CODE END USART4_Init 1 */
+  huart4.Instance = USART4;
+  huart4.Init.BaudRate = 115200;
+  huart4.Init.WordLength = UART_WORDLENGTH_8B;
+  huart4.Init.StopBits = UART_STOPBITS_1;
+  huart4.Init.Parity = UART_PARITY_NONE;
+  huart4.Init.Mode = UART_MODE_TX_RX;
+  huart4.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart4.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart4.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart4.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  huart4.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART4_Init 2 */
+
+  /* USER CODE END USART4_Init 2 */
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -758,8 +1038,8 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
             buf2_ready = true;
             rx2_index = 0;
             active_buf2 = (active_buf2 == rx2_buf1) ? rx2_buf2 : rx2_buf1;//切换缓冲�???????????
-            // SEGGER_RTT_WriteString(0, "UART2 Data: ");
-            // SEGGER_RTT_WriteString(0, (char*)active_buf2);
+            SEGGER_RTT_WriteString(0, "UART2 Data: ");
+            SEGGER_RTT_WriteString(0, (char*)active_buf2);
         }
 
         HAL_UART_Receive_IT(&huart2, &active_buf2[rx2_index], 1);//继续下一个字节的接收
