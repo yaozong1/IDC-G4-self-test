@@ -43,12 +43,25 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+SPI_HandleTypeDef hspi1;
+
+TIM_HandleTypeDef htim3;
+
+UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 // 双缓冲区配置
 //FOR uart1
 #define RX_BUF_SIZE 256  // 增大缓冲区防止溢
+
+uint8_t rx1_buf1[RX_BUF_SIZE];
+uint8_t rx1_buf2[RX_BUF_SIZE];
+uint8_t *active_buf1 = rx1_buf1;
+uint16_t rx1_index = 0;
+volatile bool buf1_ready = false;
+uint8_t processing_buf1[RX_BUF_SIZE];
+
 
 //for uart2
 uint8_t rx2_buf1[RX_BUF_SIZE];
@@ -63,6 +76,9 @@ uint8_t processing_buf2[RX_BUF_SIZE];
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_USART1_UART_Init(void);
+static void MX_TIM3_Init(void);
+static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -102,14 +118,29 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART2_UART_Init();
+  MX_USART1_UART_Init();
+  MX_TIM3_Init();
+  MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
+  
+  // 启动PWM输出
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+  
+  // 初始化RTT和UART接收
+  SEGGER_RTT_Init();
+  SEGGER_RTT_WriteString(0, "System Initialized\r\n");
+  HAL_UART_Receive_IT(&huart2, active_buf2, RX_BUF_SIZE);
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  uint32_t lastSendTime = 0;
-  const char *atCommand = "AT+ADV?\r\n";
+  uint32_t lastPwmUpdate = 0;
+  uint32_t pwmValue = 0;
+  bool increasing = true;
+
+  HAL_GPIO_WritePin(GPIOB, GNSS_PWR_EN_Pin, GPIO_PIN_SET); //使能GNSS模块电源
+   HAL_GPIO_WritePin(GPIOB, Touch_EN_Pin, GPIO_PIN_RESET); //使能触摸电源
   
   while (1)
   {
@@ -117,23 +148,40 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     uint32_t currentTime = HAL_GetTick();
-    
-    // LED闪烁控制
-    HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_1);
-    HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_8);
-    HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_6);
-    HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_7);
-    HAL_Delay(500); // Toggle every 500 ms
-    
-    // 每5秒发送一次AT指令
-    // if(currentTime - lastSendTime >= 5000)
-    // {
-    //     HAL_UART_Transmit(&huart2, (uint8_t*)atCommand, strlen(atCommand), 100);
-    //     lastSendTime = currentTime;
+
+    // PWM占空比渐变控制（每200ms更新一次）
+    if(currentTime - lastPwmUpdate >= 500)
+    {
+        if(increasing)
+        {
+            pwmValue += 100;  // 增加10%
+            if(pwmValue >= 700)
+            {
+                pwmValue = 700;
+                increasing = false;
+            }
+        }
+        else
+        {
+            if(pwmValue >= 100)
+            {
+                pwmValue -= 100;  // 减少10%
+            }
+            else
+            {
+                pwmValue = 0;
+                increasing = true;
+            }
+        }
         
-    //     // 通过RTT打印发送状态
-    //     SEGGER_RTT_printf(0, "Send AT command: %s", atCommand);
-    // }
+        // 更新PWM占空比
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, pwmValue);
+        lastPwmUpdate = currentTime;
+        
+        // 通过RTT打印当前PWM值（用于调试）
+        SEGGER_RTT_printf(0, "PWM Value: %d%%\r\n", (pwmValue * 100) / 1000);
+        
+    }
   }
   /* USER CODE END 3 */
 }
@@ -184,6 +232,155 @@ void SystemClock_Config(void)
   /** Enables the Clock Security System
   */
   HAL_RCC_EnableCSS();
+}
+
+/**
+  * @brief SPI1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI1_Init(void)
+{
+
+  /* USER CODE BEGIN SPI1_Init 0 */
+
+  /* USER CODE END SPI1_Init 0 */
+
+  /* USER CODE BEGIN SPI1_Init 1 */
+
+  /* USER CODE END SPI1_Init 1 */
+  /* SPI1 parameter configuration*/
+  hspi1.Instance = SPI1;
+  hspi1.Init.Mode = SPI_MODE_MASTER;
+  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi1.Init.DataSize = SPI_DATASIZE_4BIT;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.NSS = SPI_NSS_HARD_OUTPUT;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi1.Init.CRCPolynomial = 7;
+  hspi1.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
+  hspi1.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
+  if (HAL_SPI_Init(&hspi1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SPI1_Init 2 */
+
+  /* USER CODE END SPI1_Init 2 */
+
+}
+
+/**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 63;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 999;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+  HAL_TIM_MspPostInit(&htim3);
+
+}
+
+/**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetTxFifoThreshold(&huart1, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetRxFifoThreshold(&huart1, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_DisableFifoMode(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+  HAL_NVIC_SetPriority(USART1_IRQn, 1, 0);
+  HAL_NVIC_EnableIRQ(USART1_IRQn);
+  HAL_UART_Receive_IT(&huart1, &active_buf1[rx1_index], 1);
+  /* USER CODE END USART1_Init 2 */
+
 }
 
 /**
@@ -256,16 +453,16 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1|Touch_EN_Pin|GNSS_PWR_EN_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_6|GPIO_PIN_7, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_6, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : PB1 */
-  GPIO_InitStruct.Pin = GPIO_PIN_1;
+  /*Configure GPIO pins : PB1 Touch_EN_Pin GNSS_PWR_EN_Pin */
+  GPIO_InitStruct.Pin = GPIO_PIN_1|Touch_EN_Pin|GNSS_PWR_EN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -278,8 +475,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PC6 PC7 */
-  GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
+  /*Configure GPIO pin : PC6 */
+  GPIO_InitStruct.Pin = GPIO_PIN_6;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -293,6 +490,24 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 /* UART中断回调 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+      if (huart == &huart1) {
+
+    	//SEGGER_RTT_WriteString(0, "Timer interrupt occurred!\n");
+        uint8_t byte = active_buf1[rx1_index];
+        rx1_index++;
+
+        if (byte == '\n' || rx1_index >= RX_BUF_SIZE - 1) {
+            active_buf1[rx1_index] = '\0';
+            buf1_ready = true;
+            rx1_index = 0;
+            active_buf1 = (active_buf1 == rx1_buf1) ? rx1_buf2 : rx1_buf1;//切换缓冲�???????????
+            SEGGER_RTT_WriteString(0, "UART1 Data: ");
+            SEGGER_RTT_WriteString(0, (char*)active_buf1);
+        }
+
+        HAL_UART_Receive_IT(&huart1, &active_buf1[rx1_index], 1);//继续下一个字节的接收
+    }
+
 
     if (huart == &huart2) {
         uint8_t byte = active_buf2[rx2_index];
