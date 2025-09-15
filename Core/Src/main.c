@@ -24,6 +24,7 @@
 #include "SEGGER_RTT.h"
 #include "w25q32.h"
 #include "vk16k33.h"
+#include "xw12.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include "string.h"
@@ -295,6 +296,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   uint32_t lastPwmUpdate = 0;
   uint32_t lastDisplayUpdate = 0;
+  uint32_t lastXW12Update = 0;
   uint32_t pwmValue = 0;
   uint16_t displayCounter = 0;
   bool increasing = true;
@@ -348,6 +350,23 @@ int main(void)
             displayCounter = 0;
         }
         lastDisplayUpdate = currentTime;
+    }
+
+    // XW12按键读取（每100ms读取一次）
+    if(currentTime - lastXW12Update >= 100)
+    {
+        uint16_t keyValue = xw12ReadKey();
+        if(keyValue != 0xFFFF && keyValue != 0x0000) {
+            // 有按键按下时才打印
+            SEGGER_RTT_printf(0, "XW12 Key: 0x%04X (", keyValue);
+            for(uint8_t i = 0; i < 16; i++) {
+                if(keyValue & (1 << i)) {
+                    SEGGER_RTT_printf(0, "K%d ", i+1);
+                }
+            }
+            SEGGER_RTT_WriteString(0, ")\r\n");
+        }
+        lastXW12Update = currentTime;
     }
 
   }
@@ -672,7 +691,10 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, FLASH_CS_Pin|GPIO_PIN_8, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1|Touch_EN_Pin|GNSS_PWR_EN_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1|GPIO_PIN_6|GPIO_PIN_7, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, Touch_EN_Pin|GNSS_PWR_EN_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_6, GPIO_PIN_RESET);
@@ -684,8 +706,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PB1 Touch_EN_Pin GNSS_PWR_EN_Pin */
-  GPIO_InitStruct.Pin = GPIO_PIN_1|Touch_EN_Pin|GNSS_PWR_EN_Pin;
+  /*Configure GPIO pins : PB1 Touch_EN_Pin GNSS_PWR_EN_Pin PB6
+                           PB7 */
+  GPIO_InitStruct.Pin = GPIO_PIN_1|Touch_EN_Pin|GNSS_PWR_EN_Pin|GPIO_PIN_6
+                          |GPIO_PIN_7;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
