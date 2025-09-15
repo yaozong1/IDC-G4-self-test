@@ -47,6 +47,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     ${PROJECT_SOURCE_DIR}/RTT/SEGGER_RTT.c
     ${PROJECT_SOURCE_DIR}/RTT/SEGGER_RTT_printf.c
+    ${PROJECT_SOURCE_DIR}/Core/Src/w25q32.c
 )
 
 # Add include paths

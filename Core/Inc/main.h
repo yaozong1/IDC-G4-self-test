@@ -65,7 +65,7 @@ void Error_Handler(void);
 #define GNSS_PWR_EN_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
-
+extern SPI_HandleTypeDef hspi1;
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "SEGGER_RTT.h"
+#include "w25q32.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include "string.h"
@@ -121,8 +122,8 @@ int main(void)
   MX_USART1_UART_Init();
   MX_TIM3_Init();
   MX_SPI1_Init();
-  /* USER CODE BEGIN 2 */
   
+  /* USER CODE BEGIN 2 */
   // 启动PWM输出
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
   
@@ -130,6 +131,124 @@ int main(void)
   SEGGER_RTT_Init();
   SEGGER_RTT_WriteString(0, "System Initialized\r\n");
   HAL_UART_Receive_IT(&huart2, active_buf2, RX_BUF_SIZE);
+  
+  // 初始化W25Q32 Flash芯片
+  SEGGER_RTT_WriteString(0, "=== W25Q32 Flash Test Start ===\r\n");
+  
+  // 先测试SPI通信基础功能
+  SEGGER_RTT_WriteString(0, "Testing SPI communication...\r\n");
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);  // CS高
+  HAL_Delay(10);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);  // CS低
+  uint8_t test_tx = 0x9F;  // JEDEC ID命令
+  uint8_t test_rx = 0;
+  HAL_SPI_TransmitReceive(&hspi1, &test_tx, &test_rx, 1, 1000);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);  // CS高
+  SEGGER_RTT_printf(0, "SPI test - TX: 0x%02X, RX: 0x%02X\r\n", test_tx, test_rx);
+  
+  W25Q32_Init();
+  
+  // 读取详细的芯片信息
+  uint8_t manufacturer_id, memory_type, capacity;
+  W25Q32_ReadJEDECID(&manufacturer_id, &memory_type, &capacity);
+  SEGGER_RTT_printf(0, "JEDEC ID - Manufacturer: 0x%02X, Type: 0x%02X, Capacity: 0x%02X\r\n", 
+                    manufacturer_id, memory_type, capacity);
+  
+  // 读取设备ID
+  uint8_t device_id = W25Q32_ReadID();
+  SEGGER_RTT_printf(0, "Device ID: 0x%02X ", device_id);
+  
+  // 验证芯片（W25Q32的典型值）
+  bool chip_valid = false;
+  if(manufacturer_id == 0xEF) {  // Winbond
+    if(capacity == 0x15) {  // 32Mbit (4MB)
+      SEGGER_RTT_WriteString(0, "(W25Q32 - Valid)\r\n");
+      chip_valid = true;
+    } else if(capacity == 0x14) {  // 16Mbit (2MB) 
+      SEGGER_RTT_WriteString(0, "(W25Q16 - Valid)\r\n");
+      chip_valid = true;
+    } else if(capacity == 0x16) {  // 64Mbit (8MB)
+      SEGGER_RTT_WriteString(0, "(W25Q64 - Valid)\r\n");
+      chip_valid = true;
+    } else {
+      SEGGER_RTT_printf(0, "(Unknown Winbond Flash - Capacity: 0x%02X)\r\n", capacity);
+      chip_valid = true;  // 仍然是有效的Winbond芯片
+    }
+  } else {
+    SEGGER_RTT_printf(0, "(Unknown Manufacturer - Expected Winbond 0xEF)\r\n");
+  }
+  
+  // 测试数据准备
+  uint8_t write_buffer[32] = "Hello W25Q32 Flash Test!";
+  uint8_t read_buffer[32] = {0};
+  uint32_t test_address = 0x0000;  // 测试地址
+  uint16_t data_length = strlen((char*)write_buffer) + 1;  // 包含结束符
+  
+  // Step 1: 擦除扇区
+  SEGGER_RTT_WriteString(0, "Step 1: Erasing sector 0...\r\n");
+  W25Q32_Erase_Sector(0);
+  
+  // 验证擦除结果 - 读取应该全是0xFF
+  W25Q32_Read_Data(read_buffer, test_address, data_length);
+  bool erase_ok = true;
+  for(int i = 0; i < data_length; i++) {
+    if(read_buffer[i] != 0xFF) {
+      erase_ok = false;
+      break;
+    }
+  }
+  
+  if(erase_ok) {
+    SEGGER_RTT_WriteString(0, "Erase verification: PASS\r\n");
+  } else {
+    SEGGER_RTT_WriteString(0, "Erase verification: FAIL\r\n");
+  }
+  
+  // Step 2: 写入数据
+  SEGGER_RTT_printf(0, "Step 2: Writing data: '%s'\r\n", write_buffer);
+  W25Q32_Write(write_buffer, test_address, data_length);
+  
+  // Step 3: 读取并验证写入的数据
+  memset(read_buffer, 0, sizeof(read_buffer));  // 清空读取缓冲区
+  W25Q32_Read_Data(read_buffer, test_address, data_length);
+  
+  bool write_ok = (strcmp((char*)write_buffer, (char*)read_buffer) == 0);
+  if(write_ok) {
+    SEGGER_RTT_printf(0, "Read data: '%s' - MATCH\r\n", read_buffer);
+    SEGGER_RTT_WriteString(0, "Write/Read verification: PASS\r\n");
+  } else {
+    SEGGER_RTT_printf(0, "Read data: '%s' - MISMATCH\r\n", read_buffer);
+    SEGGER_RTT_WriteString(0, "Write/Read verification: FAIL\r\n");
+  }
+  
+  // Step 4: 再次擦除扇区
+  SEGGER_RTT_WriteString(0, "Step 3: Erasing sector again...\r\n");
+  W25Q32_Erase_Sector(0);
+  
+  // Step 5: 验证擦除后数据确实被删除
+  memset(read_buffer, 0, sizeof(read_buffer));  // 清空读取缓冲区
+  W25Q32_Read_Data(read_buffer, test_address, data_length);
+  
+  bool second_erase_ok = true;
+  for(int i = 0; i < data_length; i++) {
+    if(read_buffer[i] != 0xFF) {
+      second_erase_ok = false;
+      break;
+    }
+  }
+  
+  if(second_erase_ok) {
+    SEGGER_RTT_WriteString(0, "Second erase verification: PASS\r\n");
+  } else {
+    SEGGER_RTT_WriteString(0, "Second erase verification: FAIL\r\n");
+  }
+  
+  // 最终测试结果
+  if(chip_valid && erase_ok && write_ok && second_erase_ok) {
+    SEGGER_RTT_WriteString(0, "=== W25Q32 Flash Test: SUCCESS ===\r\n");
+  } else {
+    SEGGER_RTT_WriteString(0, "=== W25Q32 Flash Test: FAILED ===\r\n");
+  }
 
   /* USER CODE END 2 */
 
@@ -253,17 +372,17 @@ static void MX_SPI1_Init(void)
   hspi1.Instance = SPI1;
   hspi1.Init.Mode = SPI_MODE_MASTER;
   hspi1.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi1.Init.DataSize = SPI_DATASIZE_4BIT;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
-  hspi1.Init.NSS = SPI_NSS_HARD_OUTPUT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+  hspi1.Init.NSS = SPI_NSS_SOFT;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
   hspi1.Init.CRCPolynomial = 7;
   hspi1.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
-  hspi1.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
+  hspi1.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
   if (HAL_SPI_Init(&hspi1) != HAL_OK)
   {
     Error_Handler();
@@ -456,7 +575,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1|Touch_EN_Pin|GNSS_PWR_EN_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);  // PA4设为高电平(CS空闲状态)
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_6, GPIO_PIN_RESET);
@@ -468,11 +587,11 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PA8 */
-  GPIO_InitStruct.Pin = GPIO_PIN_8;
+  /*Configure GPIO pins : PA4 PA8 */
+  GPIO_InitStruct.Pin = GPIO_PIN_4|GPIO_PIN_8;  // PA4作为FLASH_CS输出
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;  // CS信号需要高速
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PC6 */
@@ -501,8 +620,8 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
             buf1_ready = true;
             rx1_index = 0;
             active_buf1 = (active_buf1 == rx1_buf1) ? rx1_buf2 : rx1_buf1;//切换缓冲�???????????
-            SEGGER_RTT_WriteString(0, "UART1 Data: ");
-            SEGGER_RTT_WriteString(0, (char*)active_buf1);
+            // SEGGER_RTT_WriteString(0, "UART1 Data: ");
+            // SEGGER_RTT_WriteString(0, (char*)active_buf1);
         }
 
         HAL_UART_Receive_IT(&huart1, &active_buf1[rx1_index], 1);//继续下一个字节的接收
@@ -518,8 +637,8 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
             buf2_ready = true;
             rx2_index = 0;
             active_buf2 = (active_buf2 == rx2_buf1) ? rx2_buf2 : rx2_buf1;//切换缓冲�???????????
-            SEGGER_RTT_WriteString(0, "UART2 Data: ");
-            SEGGER_RTT_WriteString(0, (char*)active_buf2);
+            // SEGGER_RTT_WriteString(0, "UART2 Data: ");
+            // SEGGER_RTT_WriteString(0, (char*)active_buf2);
         }
 
         HAL_UART_Receive_IT(&huart2, &active_buf2[rx2_index], 1);//继续下一个字节的接收
