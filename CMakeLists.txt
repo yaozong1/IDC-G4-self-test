@@ -48,6 +48,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${PROJECT_SOURCE_DIR}/RTT/SEGGER_RTT.c
     ${PROJECT_SOURCE_DIR}/RTT/SEGGER_RTT_printf.c
     ${PROJECT_SOURCE_DIR}/Core/Src/w25q32.c
+    ${PROJECT_SOURCE_DIR}/Core/Src/vk16k33.c
 )
 
 # Add include paths

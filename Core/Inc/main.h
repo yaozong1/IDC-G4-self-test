@@ -59,6 +59,8 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define FLASH_CS_Pin GPIO_PIN_4
+#define FLASH_CS_GPIO_Port GPIOA
 #define Touch_EN_Pin GPIO_PIN_12
 #define Touch_EN_GPIO_Port GPIOB
 #define GNSS_PWR_EN_Pin GPIO_PIN_13
